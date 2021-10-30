@@ -20,6 +20,10 @@ trait MethodWithArguments[T, U, V] {
   def arguments(arg1: T, arg2: U): V
 }
 
+trait MethodWithVarArgs[T, U, V] {
+  def varargs(first: T, rest: (T, U)*): V
+}
+
 trait MethodWithTypeParameters[T] {
   def typeParameters[U, V](u: U, t: T): V
 }

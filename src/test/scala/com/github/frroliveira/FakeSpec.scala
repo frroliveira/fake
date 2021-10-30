@@ -1,11 +1,12 @@
 package com.github.frroliveira
 
+import com.github.frroliveira.Fake._
 import com.github.frroliveira.test._
 import org.scalatest.{MustMatchers, WordSpec}
 
 class FakeSpec extends WordSpec with MustMatchers {
 
-  val intValue: Int = 1
+/*  val intValue: Int = 1
   val booleanValue: Boolean = true
   val stringValue: String = "string"
   val doubleValue: Double = 2.0
@@ -21,7 +22,7 @@ class FakeSpec extends WordSpec with MustMatchers {
       }
       "T is an abstract class" in {
         abstract class AbstractClass { def method: Int }
-        // TODO: Fake[AbstractClass]
+        Fake[AbstractClass]
       }
       "T is located in another package" in {
         Fake[TraitWithoutParameters]
@@ -34,25 +35,28 @@ class FakeSpec extends WordSpec with MustMatchers {
       "T is a case class" in {
         case class CaseClass(value: Int)
         "Fake[CaseClass]" mustNot compile
+        CaseClass(intValue) // cause compiler flag
       }
       "T is a non-abstract class" in {
-        class NonAbstractClass(value: Int)
+        class NonAbstractClass(val value: Int)
         "Fake[NonAbstractClass]" mustNot compile
+        new NonAbstractClass(intValue).value  // cause compiler flag
       }
       "T is sealed" in {
-        sealed trait SealedTrait extends Product with Serializable {
+        /*sealed trait SealedTrait extends Product with Serializable {
           val message: String
-        }
+        }*/
         // TODO: "Fake[SealedTrait]" mustNot compile
 
-        sealed abstract class SealedClass extends Product with Serializable {
-          val message: String
-        }
+        /*        sealed abstract class SealedClass extends Product with Serializable {
+                  val message: String
+                }*/
         "Fake[SealedClass]" mustNot compile
       }
       "T is final" in {
-        final abstract class FinalClass { def method: Int = intValue }
-        "Fake[FinalTrait]" mustNot compile
+        final class FinalClass { def method: Int = intValue }
+        "Fake[FinalClass]" mustNot compile
+        new FinalClass()
       }
     }
 
@@ -75,7 +79,7 @@ class FakeSpec extends WordSpec with MustMatchers {
         val fake = Fake[TraitWithoutParameters]
         assertUnimplemented(fake.method)
       }
-      "T has concrete type parameters" in {
+      "T has aconcrete type parameters" in {
         val fake = Fake[TraitWithSimpleParameters[Int, Boolean]]
         assertUnimplemented(fake.method(intValue))
       }
@@ -136,22 +140,6 @@ class FakeSpec extends WordSpec with MustMatchers {
     }
   }
 
-  "Fake[T].applyDynamic" should {
-    "not compile" when {
-      "dynamic method is invalid" in {
-        "Fake[Trait].withMethod(1)" mustNot compile
-        "Fake[Trait].fakemethod(1)" mustNot compile
-      }
-      "argument type doesn't match method return type" in {
-        "Fake[Trait].fakeMethod(true)" mustNot typeCheck
-      }
-    }
-
-    "compile" in {
-      "Fake[Trait].fakeMethod(1)" must compile
-    }
-  }
-
   "Fake[T].applyDynamicNamed" should {
     "not compile" when {
       "dynamic method is invalid" in {
@@ -168,9 +156,6 @@ class FakeSpec extends WordSpec with MustMatchers {
 
     "compile" when {
       "dynamic method is 'apply'" in {
-        "Fake[Trait](method = 1)" must compile
-      }
-      "dynamic method is 'fake'" in {
         "Fake[Trait].fake(method = 1)" must compile
       }
     }
@@ -182,6 +167,7 @@ class FakeSpec extends WordSpec with MustMatchers {
       val fake1 = fake.fake(method = intValue)
       val fake2 = fake.fake(method = intValue + 1)
 
+      assertThrows[NotImplementedError](fake.method(booleanValue))
       fake1.method(booleanValue) mustBe intValue
       fake2.method(booleanValue) mustBe intValue + 1
     }
@@ -207,6 +193,15 @@ class FakeSpec extends WordSpec with MustMatchers {
 
   "Fake[T] arguments" should {
     "accept constant values" when {
+      "value is a reference" in {
+        case class Example(i: Int, b: Boolean)
+        trait F {
+          def get(): Example
+        }
+        val reference = Example(intValue, booleanValue)
+        Fake[F].fake(get = reference.copy(b = booleanValue))
+          .get() mustBe reference
+      }
       "T has no type parameters" in {
         Fake[TraitWithoutParameters]
         // TODO:
@@ -254,6 +249,11 @@ class FakeSpec extends WordSpec with MustMatchers {
           .fake(arguments = stringValue)
           .arguments(intValue, booleanValue) mustBe stringValue
       }
+      "method has varargs" in {
+        Fake[MethodWithVarArgs[Int, Boolean, String]]
+          .fake(varargs = stringValue)
+          .varargs(intValue, intValue → booleanValue) mustBe stringValue
+      }
       "method has concrete type parameters" in {
         // TODO:
       }
@@ -299,6 +299,5 @@ class FakeSpec extends WordSpec with MustMatchers {
         .fake(method = fn)
         .method(false) mustBe 0
     }
-  }
+  }*/
 }
-

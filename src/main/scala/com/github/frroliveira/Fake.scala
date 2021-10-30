@@ -1,73 +1,68 @@
 package com.github.frroliveira
 
-import scala.language.dynamics
-import scala.language.experimental.macros
 import scala.reflect.macros.whitebox
 
-trait Fake[T] extends Dynamic { self: T =>
+trait Fake[T] {
+  def fake: FakeFrom[T]
+}
 
-  val _fake: T = self
+final class FakeEmpty[T] extends Dynamic {
 
-  def applyDynamic[U](dynamicMethod: String)(args: Any*): Fake[T] with T =
-    macro FakeMacros.applyDynamicImpl[T]
-
-  def applyDynamicNamed[U](dynamicMethod: String)(args: (String, Any)*): Fake[T] with T =
+  def applyDynamicNamed[U](dynamicMethod: String)(args: (String, Any)*): Fake[T] =
     macro FakeMacros.applyDynamicNamedImpl[T]
 }
 
+final class FakeFrom[T](val value: T) extends Dynamic {
+
+  def applyDynamicNamed[U](dynamicMethod: String)(args: (String, Any)*): Fake[T] =
+    macro FakeMacros.applyDynamicNamedImpl[T]
+}
+
+
 object Fake {
-  def apply[T]: Fake[T] with T = macro FakeMacros.applyImpl[T]
+
+  def apply[T]: FakeEmpty[T] = new FakeEmpty[T]
+
+  def unsafe[T]: Fake[T] = macro FakeMacros.applyImpl[T]
+
+  implicit def fakeToT[T](fake: Fake[T]): T = fake.fake.value
 }
 
 @macrocompat.bundle
 final class FakeMacros(val c: whitebox.Context) {
   import c.universe._
 
-  case class Class(tpe: c.Type,
-                   params: List[c.Type],
+  case class Class(tpe: Type,
+                   params: List[Type],
                    methods: List[Method])
 
-  case class Method(name: c.TermName,
+  case class Method(name: TermName,
                     typeParams: List[TypeSymbol],
-                    arguments: List[List[c.Symbol]],
-                    returnType: c.Type)
+                    arguments: List[List[Symbol]],
+                    returnType: Type)
 
-  case class TypeParameterMap(resolved: Map[c.Symbol, TypeSymbol])
+  case class TypeParameterMap(resolved: Map[Symbol, TypeSymbol])
 
-  import Generator._
+  import Printer._
   import Parser._
 
-  def applyImpl[T: c.WeakTypeTag]: c.Tree = {
+  def applyImpl[T: WeakTypeTag]: Tree = {
     val tpe = weakTypeOf[T]
     val cls = parseClass(tpe)
     val result = fakeTree(tpe, cls.methods.map(unimplementedMethodTree))
+    println(result)
     result
   }
 
-  def applyDynamicImpl[T: c.WeakTypeTag](dynamicMethod: c.Tree)(args: c.Tree*): c.Tree = {
+  def applyDynamicNamedImpl[T: WeakTypeTag](dynamicMethod: Tree)(args: Tree*): Tree = {
     val tpe = weakTypeOf[T]
     val cls = parseClass(tpe)
 
-    val fnStr = parseString(dynamicMethod)
-    val targetMethod = cls.methods
-      .find("fake" + _.name.toString.capitalize == fnStr)
-      .getOrElse(c.abort(c.enclosingPosition, s"invalid member $fnStr"))
-
-    val impl = cls.methods.map { m ⇒
-      if (targetMethod == m) overriddenMethodTree(m, args.head)
-      else overriddenMethodTree(m)
-    }
-
-    val result = withSelfTree(fakeTree(tpe, impl))
-    result
-  }
-
-  def applyDynamicNamedImpl[T: c.WeakTypeTag](dynamicMethod: c.Tree)(args: c.Tree*): c.Tree = {
-    val tpe = weakTypeOf[T]
-    val cls = parseClass(tpe)
+    val method = parseString(dynamicMethod)
+    if (!Set("apply").contains(method)) c.abort(c.enclosingPosition, "Invalid member")
 
     val overrides = args.map { arg ⇒
-      val q"(${name: c.Tree}, ${value: c.Tree})" = arg
+      val q"(${name: Tree}, ${value: Tree})" = arg
       parseString(name) → value
     }.toMap
 
@@ -76,17 +71,19 @@ final class FakeMacros(val c: whitebox.Context) {
         .fold(overriddenMethodTree(m))(overriddenMethodTree(m, _))
     }
 
-    withSelfTree(fakeTree(tpe, impl))
+    val result = overrideFakeTree(tpe, impl)
+    println(result)
+    result
   }
 
   private object Parser {
 
-    def parseString(tree: c.Tree): String = {
+    def parseString(tree: Tree): String = {
       val q"${str: String}" = tree
       str
     }
 
-    def parseClass(tpe: c.Type): Class = {
+    def parseClass(tpe: Type): Class = {
       Class(
         tpe,
         tpe.typeArgs,
@@ -98,7 +95,7 @@ final class FakeMacros(val c: whitebox.Context) {
       )
     }
 
-    def parseMethod(methodSymbol: MethodSymbol, tpe: c.Type): Method = {
+    def parseMethod(methodSymbol: MethodSymbol, tpe: Type): Method = {
       Method(
         name = methodSymbol.name,
         typeParams = methodSymbol.infoIn(tpe).typeParams.map(_.asType),
@@ -106,19 +103,24 @@ final class FakeMacros(val c: whitebox.Context) {
         returnType = methodSymbol.infoIn(tpe).finalResultType
       )
     }
+
+    def parseFakeMethods(tree: Tree): List[scala.reflect.api.Trees#Tree] = {
+      val q"new ..$_ { val _value: $_ = new ..$_ { ..$methods }  }" = tree
+      methods.toList
+    }
   }
 
-  private object Generator {
+  private object Printer {
     import internal._
 
-    def unimplementedMethodTree(method: Method): c.Tree = {
+    def unimplementedMethodTree(method: Method): Tree = {
       val mods = Modifiers(Flag.OVERRIDE)
       val paramss = method.arguments.map(_.map(s ⇒ setSymbol(internal.valDef(s), NoSymbol)))
 
       q"$mods def ${method.name}[..${method.typeParams.map(typeDef(_))}](...$paramss): ${method.returnType} = ???"
     }
 
-    def overriddenMethodTree(method: Method): c.Tree = {
+    def overriddenMethodTree(method: Method): Tree = {
       val mods = Modifiers(Flag.OVERRIDE)
       val paramsValDefs = method.arguments.map(_.map(s ⇒ setSymbol(internal.valDef(s), NoSymbol)))
       val paramsNames = paramsValDefs.map(_.map(_.name))
@@ -129,7 +131,7 @@ final class FakeMacros(val c: whitebox.Context) {
       }"""
     }
 
-    def overriddenMethodTree(method: Method, body: c.Tree): c.Tree = {
+    def overriddenMethodTree(method: Method, body: Tree): Tree = {
       val mods = Modifiers(Flag.OVERRIDE)
       val paramss = method.arguments.map(_.map(s ⇒ setSymbol(internal.valDef(s), NoSymbol)))
       val paramsNames = paramss.map(_.map(_.name))
@@ -137,7 +139,7 @@ final class FakeMacros(val c: whitebox.Context) {
       if (body.tpe <:< method.returnType)
         q"""
         $mods def ${method.name}[..${method.typeParams.map(typeDef(_))}](...$paramss): ${method.returnType} = {
-          $body
+          ${c.untypecheck(body)}
         }"""
       else
         q"""
@@ -146,18 +148,26 @@ final class FakeMacros(val c: whitebox.Context) {
         }"""
     }
 
-    def withSelfTree(tree: c.Tree): c.Tree = {
-      val selfSelect = Select(c.prefix.tree, TermName("_fake"))
-      q""" {
-        val self = $selfSelect
-        $tree
-      }"""
+    def overrideFakeTree(tpe: Type, body: Iterable[Tree] = Nil): Tree = {
+      if (body.size == 1) fakeTree(tpe, body)
+      else {
+        val tree = fakeTree(tpe, body)
+        val selfSelect = Select(c.prefix.tree, TermName("value"))
+        q""" {
+          val self = $selfSelect
+          $tree
+        }"""
+      }
     }
 
-    def fakeTree(tpe: c.Type, body: Iterable[c.Tree] = Nil): c.Tree =
+    def fakeTree(tpe: Type, body: Iterable[Tree] = Nil): Tree = {
       q"""
-      new com.github.frroliveira.Fake[$tpe] with $tpe {
-         ..$body
+      new com.github.frroliveira.Fake[$tpe] {
+        def fake: com.github.frroliveira.FakeFrom[$tpe] =
+          new com.github.frroliveira.FakeFrom[$tpe](
+            new $tpe { ..$body }
+          )
       }"""
+    }
   }
 }
